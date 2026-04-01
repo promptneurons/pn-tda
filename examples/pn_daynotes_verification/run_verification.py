@@ -29,6 +29,11 @@ from examples.pn_autoresearch_integration.evaluate import (
     evaluate_search_quality,
     load_queries,
 )
+from examples.pn_daynotes_verification.cache import (
+    config_hash,
+    load_cache,
+    save_cache,
+)
 from pn_tda.adapters.signal_db import SignalDBGraph
 from pn_tda.core.filtration import VietorisRipsBuilder
 from pn_tda.core.persistence import PersistentHomology
@@ -325,6 +330,10 @@ def main():
                         help="Filtration scale count (default: 10)")
     parser.add_argument("--max-nodes", type=int, default=int(os.environ.get("TDA_MAX_NODES", "300")),
                         help="Max signal DB nodes for TDA (subsamples by density, default: 300)")
+    parser.add_argument("--cache", default=os.environ.get("TDA_CACHE", ""),
+                        help="Path to cache file for TDA features (skips pipeline on hit)")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Force recompute even if cache exists")
     args = parser.parse_args()
 
     # Resolve paths
@@ -368,16 +377,38 @@ def main():
           f"P@3={baseline_metrics['precision_at_3']:.4f} "
           f"({baseline_time:.1f}s)")
 
-    # --- TDA Pipeline ---
-    print("\n2. Running TDA pipeline...")
-    t0 = time.time()
-    tda_features = run_tda_pipeline(
-        signal_path, args.epsilon_max, args.max_dimension, args.num_scales,
-        max_nodes=args.max_nodes,
+    # --- TDA Pipeline (with cache) ---
+    cache_path = args.cache or os.path.join(
+        os.path.dirname(signal_path), "tda_cache.db"
     )
-    tda_pipeline_time = time.time() - t0
+    cfg_hash = config_hash(
+        signal_path, args.epsilon_max, args.max_dimension,
+        args.num_scales, args.max_nodes,
+    )
+
+    tda_features = None
+    if not args.no_cache:
+        tda_features = load_cache(cache_path, cfg_hash)
+        if tda_features:
+            print(f"\n2. TDA features loaded from cache ({cache_path})")
+
+    if tda_features is None:
+        print("\n2. Running TDA pipeline...")
+        t0 = time.time()
+        tda_features = run_tda_pipeline(
+            signal_path, args.epsilon_max, args.max_dimension, args.num_scales,
+            max_nodes=args.max_nodes,
+        )
+        tda_pipeline_time = time.time() - t0
+        print(f"   Pipeline complete ({tda_pipeline_time:.1f}s)")
+
+        # Save to cache
+        save_cache(cache_path, cfg_hash, tda_features)
+        print(f"   Cached to {cache_path}")
+    else:
+        tda_pipeline_time = 0.0
+
     signal_doc_ids = set(tda_features["doc_ids"])
-    print(f"   Pipeline complete ({tda_pipeline_time:.1f}s)")
 
     # --- TDA Experiment ---
     kw_pct = int((1.0 - args.tda_weight) * 100)
