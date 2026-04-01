@@ -11,17 +11,17 @@ per sprint, with heading content read from the corpus DB's `raw_content` column
 cd pn-tda
 pip install -e ".[dev]"
 
-# Recent 20 sprints (fast)
+# All 169 sprints, graph filtration + headings (fast, ~5s)
+python3 examples/daynotes_verification/sprint_evolution.py --no-vr
+
+# Recent 20 sprints with VR comparison
 python3 examples/daynotes_verification/sprint_evolution.py --recent 20
 
-# All 170 sprints
-python3 examples/daynotes_verification/sprint_evolution.py
-
 # Cumulative (growing corpus)
-python3 examples/daynotes_verification/sprint_evolution.py --cumulative --recent 20
+python3 examples/daynotes_verification/sprint_evolution.py --no-vr --cumulative
 
 # TSV output
-python3 examples/daynotes_verification/sprint_evolution.py --tsv > daynotes-evolution.tsv
+python3 examples/daynotes_verification/sprint_evolution.py --no-vr --tsv > daynotes-evolution.tsv
 ```
 
 ## Data Sources
@@ -39,32 +39,86 @@ python3 examples/daynotes_verification/sprint_evolution.py --tsv > daynotes-evol
 | **Vietoris-Rips** | Statistical signal co-occurrence | All-pairs Jaccard, O(n²) |
 | **Heading topology** | Intra-document outline structure | Corpus DB `raw_content`, markdown `#`/`##`/`###` |
 
-## Findings (Recent 20 Sprints, Mar-Sep 2025)
+## Findings: Full 169-Sprint Longitudinal View (2010-2025)
 
-### Graph Filtration vs VR
+The wiki spans two eras separated by a dormancy gap:
 
-Same story as obsidian-local: VR sees every sprint as a single connected
-component (β₀=1). Graph filtration reveals actual structure:
+### Era 1: Early Daynotes (2010-2014) — 133 sprints
 
-| Sprint | Docs | Edges | GF β₀ | GF β₁ | GF Maturity | VR β₀ |
-|--------|------|-------|-------|-------|-------------|-------|
-| 25030 | 20 | 7 | 15 | 0 | 0.53 | 1 |
-| 25041 | 57 | 22 | 35 | 0 | 0.52 | 1 |
-| 25072 | 129 | 41 | 94 | **4** | **0.78** | 1 |
-| 25082 | 99 | 40 | 63 | **3** | **0.77** | 1 |
-| 25090 | 112 | 66 | 57 | **1** | **0.76** | 1 |
+Flat notes with minimal linking. Most sprints have 0 edges and
+maturity at the baseline floor (0.45). Heading structure is sparse.
 
-**Peak maturity: Sprint 25072 (Jul 2025)** — 129 docs, 41 edges, 4 loops, 0.78 maturity.
-This is the most topologically mature sprint in the recent window.
+| Sprint | Year | Docs | Edges | β₀ | β₁ | Maturity | Headings | hβ₁ |
+|--------|------|------|-------|----|----|----------|----------|-----|
+| 10092 | 2010-Sep | 14 | 3 | 11 | 0 | 0.54 | 2 | 0 |
+| 11040 | 2011-Apr | 30 | 6 | 25 | 0 | 0.52 | 59 | 0 |
+| 11052 | 2011-May | 30 | 1 | 29 | 0 | 0.46 | 62 | **22** |
+| 11092 | 2011-Sep | 21 | 6 | 15 | 0 | 0.53 | 10 | 0 |
+| 12090 | 2012-Sep | 70 | 7 | 63 | 0 | 0.49 | 15 | 0 |
+| 13042 | 2013-Apr | 55 | 16 | 42 | 0 | 0.53 | 34 | 0 |
+| 14061 | 2014-Jun | 84 | 24 | 61 | 0 | 0.53 | 277 | **48** |
+| 14091 | 2014-Sep | 38 | 1 | 37 | 0 | 0.46 | 226 | **20** |
+| 14102 | 2014-Oct | 50 | 17 | 33 | 0 | 0.52 | 0 | 0 |
+
+No β₁ loops ever appear in the inter-document graph — pure tree/forest
+structure. Heading loops (hβ₁) first appear at 11052 (May 2011) and peak
+at 14061 (Jun 2014, 48 heading loops from 277 headings).
+
+### Gap: 2015-2018
+
+Single sprint `9100` (2019-Oct, 3 docs) — wiki largely dormant.
+
+### Era 2: Active Development (2025) — 35 sprints
+
+Knowledge graph emerges. Edges increase, β₁ appears, maturity rises sharply.
+
+| Sprint | Year | Docs | Edges | β₀ | β₁ | Maturity | Headings | hβ₁ |
+|--------|------|------|-------|----|----|----------|----------|-----|
+| 25011 | 2025-Jan | 80 | 12 | 68 | 0 | 0.51 | 3 | 0 |
+| 25041 | 2025-Apr | 57 | 22 | 35 | 0 | 0.52 | 17 | 0 |
+| 25052 | 2025-May | 80 | 4 | 76 | 0 | 0.47 | 99 | **73** |
+| 25061 | 2025-Jun | 57 | 1 | 56 | 0 | 0.46 | 150 | **45** |
+| **25072** | **2025-Jul** | **129** | **41** | **94** | **4** | **0.78** | **317** | **69** |
+| 25082 | 2025-Aug | 99 | 40 | 63 | **3** | **0.77** | 45 | 0 |
+| 25090 | 2025-Sep | 112 | 66 | 57 | **1** | **0.76** | 164 | 4 |
+| 25091 | 2025-Sep | 40 | 14 | 26 | 0 | 0.52 | 0 | 0 |
+
+**Sprint 25072 (Jul 2025) is the topological peak**: 129 docs, 41 edges,
+4 inter-document loops (β₁), maturity 0.78, and the richest heading structure
+(317 headings, 69 heading loops). This is when the Zettelkasten structure
+fully crystallizes.
+
+### Trend Summary (169 sprints)
+
+```
+Graph filtration: maturity 0.450 → 0.520  conn 0.000 → 0.359
+Peak maturity:    25072 (2025-Jul-2) = 0.782
+Most headings:    25072 (317)
+Most heading loops: 25052 (hβ₁=73)
+```
+
+### Graph Filtration vs VR (per-sprint comparison, recent 20)
+
+VR sees every sprint as a single connected component (β₀=1) because
+all-pairs Jaccard puts all documents within ε=1.0 — it detects no
+topological structure. Graph filtration reveals the actual link structure:
+
+| | Graph Filtration | Vietoris-Rips |
+|---|---|---|
+| **β₀ range** | 8–94 components | Always 1 |
+| **β₁ range** | 0–4 loops | Always 0 |
+| **Maturity trend** | 0.45 → 0.78 | 0.44 → 0.47 (flat) |
+| **Simplices** | 5–190 (sparse) | 25–358K (dense) |
 
 ### Heading Topology Highlights
 
-| Sprint | Headings | Depth | hβ₁ (loops) | Branching | Observation |
-|--------|----------|-------|-------------|-----------|-------------|
-| 25052 | 99 | 4 | **73** | 11.6 | Highest branching — flat, wide outlines with many sibling cross-refs |
+| Sprint | Headings | Depth | hβ₁ | Branching | Observation |
+|--------|----------|-------|-----|-----------|-------------|
+| 25052 | 99 | 4 | **73** | 11.6 | Highest branching — flat, wide outlines |
 | 25061 | 150 | 4 | **45** | 2.8 | Rich internal structure |
-| 25072 | 317 | 4 | 69 | 3.7 | **Most headings** — largest sprint also has deepest outlines |
-| 25071 | 129 | 4 | 10 | 4.5 | Well-structured but fewer cross-references |
+| 25072 | 317 | 4 | **69** | 3.7 | Most headings — largest sprint |
+| 14061 | 277 | 4 | **48** | 3.6 | Era 1 peak — STI curriculum outlines |
+| 14091 | 226 | 4 | **20** | 2.2 | Student syllabi with deep structure |
 
 ### Key Differences from Obsidian-Local
 
