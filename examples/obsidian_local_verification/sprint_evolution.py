@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from pn_tda.adapters.signal_db import SignalDBGraph
-from pn_tda.core.filtration import GraphFiltrationBuilder
+from pn_tda.core.filtration import GraphFiltrationBuilder, VietorisRipsBuilder
 from pn_tda.core.persistence import PersistentHomology, betti_numbers
 from pn_tda.features.betti import BettiNumberExtractor
 from pn_tda.features.maturity import ThreadMaturityScorer
@@ -103,19 +103,8 @@ def build_sprint_db(
     return db_path
 
 
-def compute_sprint_metrics(db_path: str) -> dict | None:
-    """Run TDA pipeline on a sprint's signal DB and return metrics."""
-    graph = SignalDBGraph(db_path)
-    doc_ids = list(graph.nodes())
-    edges = list(graph.edges())
-
-    if len(doc_ids) < 2:
-        return None
-
-    builder = GraphFiltrationBuilder(max_dimension=2)
-    st = builder.build(graph)
-    intervals = PersistentHomology().compute(st)
-
+def _extract_features(graph, st, intervals):
+    """Extract feature dict from a built simplex tree + intervals."""
     betti = BettiNumberExtractor().extract(
         intervals, num_scales=10, epsilon_max=1.0, max_dimension=2,
     )
@@ -123,23 +112,46 @@ def compute_sprint_metrics(db_path: str) -> dict | None:
     maturity = ThreadMaturityScorer().score(
         intervals, graph, num_scales=10, epsilon_max=1.0,
     )
-
     return {
-        "nodes": len(doc_ids),
-        "edges": len(edges),
         "simplices": st.num_simplices(),
+        "intervals": len(intervals),
         "b0": betti["summary"]["betti_0_final"],
         "b1": betti["summary"]["betti_1_final"],
-        "b0_max": betti["summary"]["betti_0_max"],
-        "h0_count": persist["dim_0_count"],
-        "h0_total": persist["dim_0_total_persistence"],
         "h0_entropy": persist["dim_0_entropy"],
         "h1_count": persist["dim_1_count"],
         "maturity": maturity["maturity_score"],
         "connected": maturity["connectedness"],
         "stability": maturity["topological_stability"],
-        "plateau": maturity["persistence_plateau"],
         "dim_shift": maturity["dimensional_shift"],
+    }
+
+
+def compute_sprint_metrics(db_path: str, epsilon_max: float = 1.0) -> dict | None:
+    """Run both Graph and VR pipelines on a sprint's signal DB."""
+    graph = SignalDBGraph(db_path)
+    doc_ids = list(graph.nodes())
+    edges = list(graph.edges())
+
+    if len(doc_ids) < 2:
+        return None
+
+    # Graph filtration (O(|V|+|E|))
+    gf_builder = GraphFiltrationBuilder(max_dimension=2)
+    gf_st = gf_builder.build(graph)
+    gf_intervals = PersistentHomology().compute(gf_st)
+    gf = _extract_features(graph, gf_st, gf_intervals)
+
+    # Vietoris-Rips (O(n²)) — feasible since per-sprint n ≤ 88
+    vr_builder = VietorisRipsBuilder(epsilon_max=epsilon_max, max_dimension=2)
+    vr_st = vr_builder.build(graph)
+    vr_intervals = PersistentHomology().compute(vr_st)
+    vr = _extract_features(graph, vr_st, vr_intervals)
+
+    return {
+        "nodes": len(doc_ids),
+        "edges": len(edges),
+        "gf": gf,
+        "vr": vr,
     }
 
 
@@ -195,17 +207,17 @@ def main():
     # Header
     if args.tsv:
         cols = [
-            "sprint", "label", "docs", "edges", "simplices",
-            "β₀", "β₁", "H0_count", "H0_entropy",
-            "H1_count", "maturity", "connected", "stability", "dim_shift",
+            "sprint", "label", "docs", "edges",
+            "gf_simpl", "gf_β₀", "gf_β₁", "gf_matur", "gf_conn",
+            "vr_simpl", "vr_β₀", "vr_β₁", "vr_matur", "vr_conn",
         ]
         print("\t".join(cols))
     else:
-        print(f"  {'Sprint':<7} {'Label':<13} {'Docs':>5} {'Edges':>6} "
-              f"{'Simpl':>6} {'β₀':>4} {'β₁':>4} "
-              f"{'H0ent':>6} {'H1':>3} "
-              f"{'Matur':>6} {'Conn':>6} {'Stab':>6} {'DShft':>5}")
-        print(f"  {'─' * 96}")
+        print(f"  {'':21} {'':11}│ {'Graph Filtration O(V+E)':^29} │ {'Vietoris-Rips O(n²)':^29}")
+        print(f"  {'Sprint':<7} {'Label':<10} {'N':>4} {'E':>4}"
+              f"│ {'Spl':>6} {'β₀':>4} {'β₁':>4} {'Mat':>5} {'Con':>5}"
+              f" │ {'Spl':>6} {'β₀':>4} {'β₁':>4} {'Mat':>5} {'Con':>5}")
+        print(f"  {'─' * 90}")
 
     results = []
     cumulative_sprints = []
@@ -234,48 +246,48 @@ def main():
             metrics["label"] = label
             results.append(metrics)
 
+            gf = metrics["gf"]
+            vr = metrics["vr"]
+
             if args.tsv:
                 vals = [
                     sprint_id, label, str(metrics["nodes"]), str(metrics["edges"]),
-                    str(metrics["simplices"]), str(metrics["b0"]), str(metrics["b1"]),
-                    str(metrics["h0_count"]), f"{metrics['h0_entropy']:.4f}",
-                    str(metrics["h1_count"]),
-                    f"{metrics['maturity']:.4f}", f"{metrics['connected']:.4f}",
-                    f"{metrics['stability']:.4f}", f"{metrics['dim_shift']:.1f}",
+                    str(gf["simplices"]), str(gf["b0"]), str(gf["b1"]),
+                    f"{gf['maturity']:.4f}", f"{gf['connected']:.4f}",
+                    str(vr["simplices"]), str(vr["b0"]), str(vr["b1"]),
+                    f"{vr['maturity']:.4f}", f"{vr['connected']:.4f}",
                 ]
                 print("\t".join(vals))
             else:
                 print(
-                    f"  {sprint_id:<7} {label:<13} {metrics['nodes']:>5} "
-                    f"{metrics['edges']:>6} {metrics['simplices']:>6} "
-                    f"{metrics['b0']:>4} {metrics['b1']:>4} "
-                    f"{metrics['h0_entropy']:>6.2f} {metrics['h1_count']:>3} "
-                    f"{metrics['maturity']:>6.3f} {metrics['connected']:>6.3f} "
-                    f"{metrics['stability']:>6.3f} {metrics['dim_shift']:>5.1f}"
+                    f"  {sprint_id:<7} {label:<10} {metrics['nodes']:>4} "
+                    f"{metrics['edges']:>4}"
+                    f"│ {gf['simplices']:>6} {gf['b0']:>4} {gf['b1']:>4} "
+                    f"{gf['maturity']:>5.2f} {gf['connected']:>5.2f}"
+                    f" │ {vr['simplices']:>6} {vr['b0']:>4} {vr['b1']:>4} "
+                    f"{vr['maturity']:>5.2f} {vr['connected']:>5.2f}"
                 )
 
     source_conn.close()
 
     if not args.tsv and len(results) >= 2:
-        # Summary: trend analysis
         first = results[0]
         last = results[-1]
-        print(f"\n  {'─' * 96}")
+        print(f"\n  {'─' * 90}")
         print(f"  TREND ({first['sprint']} → {last['sprint']}):")
-        print(f"    Maturity:     {first['maturity']:.3f} → {last['maturity']:.3f}  "
-              f"(Δ{last['maturity'] - first['maturity']:+.3f})")
-        print(f"    Connectedness: {first['connected']:.3f} → {last['connected']:.3f}  "
-              f"(Δ{last['connected'] - first['connected']:+.3f})")
-        print(f"    H0 entropy:   {first['h0_entropy']:.3f} → {last['h0_entropy']:.3f}  "
-              f"(Δ{last['h0_entropy'] - first['h0_entropy']:+.3f})")
+        for builder, key in [("Graph", "gf"), ("VR   ", "vr")]:
+            f_m = first[key]["maturity"]
+            l_m = last[key]["maturity"]
+            f_c = first[key]["connected"]
+            l_c = last[key]["connected"]
+            print(f"    {builder}: maturity {f_m:.3f}→{l_m:.3f} (Δ{l_m-f_m:+.3f})  "
+                  f"conn {f_c:.3f}→{l_c:.3f} (Δ{l_c-f_c:+.3f})")
 
-        # Find peak maturity sprint
-        peak = max(results, key=lambda r: r["maturity"])
-        print(f"    Peak maturity: {peak['sprint']} ({peak['label']}) = {peak['maturity']:.3f}")
-
-        # Find most connected sprint
-        most_conn = max(results, key=lambda r: r["connected"])
-        print(f"    Most connected: {most_conn['sprint']} ({most_conn['label']}) = {most_conn['connected']:.3f}")
+        # Peaks
+        gf_peak = max(results, key=lambda r: r["gf"]["maturity"])
+        vr_peak = max(results, key=lambda r: r["vr"]["maturity"])
+        print(f"    Peak maturity: Graph={gf_peak['sprint']} ({gf_peak['gf']['maturity']:.3f})  "
+              f"VR={vr_peak['sprint']} ({vr_peak['vr']['maturity']:.3f})")
 
     print()
     return 0
