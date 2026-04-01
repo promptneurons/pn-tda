@@ -99,17 +99,90 @@ def normalize_path(source_path: str) -> str:
     return source_path
 
 
+def subsample_signal_db(signal_db_path: str, max_nodes: int, tmp_dir: str) -> str:
+    """Create a subsampled signal DB with the most signal-rich documents.
+
+    Selects docs with the highest signal+edge count to preserve the most
+    topologically interesting subgraph.
+    """
+    import shutil
+
+    conn = sqlite3.connect(signal_db_path)
+    total = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+
+    if total <= max_nodes:
+        conn.close()
+        return signal_db_path  # No subsampling needed
+
+    # Rank docs by signal+edge density
+    top_docs = conn.execute("""
+        SELECT d.doc_id,
+               COALESCE(s.sig_count, 0) + COALESCE(e.edge_count, 0) AS density
+        FROM documents d
+        LEFT JOIN (SELECT doc_id, COUNT(*) AS sig_count FROM signals GROUP BY doc_id) s
+            ON d.doc_id = s.doc_id
+        LEFT JOIN (SELECT source_doc_id AS doc_id, COUNT(*) AS edge_count FROM edges GROUP BY source_doc_id) e
+            ON d.doc_id = e.doc_id
+        ORDER BY density DESC
+        LIMIT ?
+    """, (max_nodes,)).fetchall()
+    keep_ids = {row[0] for row in top_docs}
+    conn.close()
+
+    # Build subsampled DB
+    sub_path = os.path.join(tmp_dir, "signals_subsample.db")
+    src = sqlite3.connect(signal_db_path)
+    dst = sqlite3.connect(sub_path)
+
+    # Copy schema (skip internal SQLite tables)
+    for row in src.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL "
+        "AND name NOT LIKE 'sqlite_%'"
+    ):
+        dst.execute(row[0])
+
+    # Copy rows for selected docs
+    placeholders = ",".join("?" for _ in keep_ids)
+    id_list = list(keep_ids)
+
+    for row in src.execute(f"SELECT * FROM documents WHERE doc_id IN ({placeholders})", id_list):
+        dst.execute(f"INSERT INTO documents VALUES ({','.join('?' for _ in row)})", tuple(row))
+
+    for row in src.execute(f"SELECT * FROM signals WHERE doc_id IN ({placeholders})", id_list):
+        dst.execute(f"INSERT INTO signals VALUES ({','.join('?' for _ in row)})", tuple(row))
+
+    for row in src.execute(f"SELECT * FROM edges WHERE source_doc_id IN ({placeholders})", id_list):
+        dst.execute(f"INSERT INTO edges VALUES ({','.join('?' for _ in row)})", tuple(row))
+
+    dst.commit()
+    src.close()
+    dst.close()
+
+    print(f"   Subsampled: {total} → {len(keep_ids)} docs (top by signal density)")
+    return sub_path
+
+
 def run_tda_pipeline(
     signal_db_path: str,
     epsilon_max: float,
     max_dimension: int,
     num_scales: int,
+    max_nodes: int = 500,
+    tmp_dir: str | None = None,
 ) -> dict:
     """Run TDA pipeline on signal DB and return per-doc features + corpus features."""
     import math
+    import tempfile
+
+    if tmp_dir is None:
+        tmp_dir = tempfile.mkdtemp()
 
     print(f"   Loading SignalDB: {signal_db_path}")
-    graph = SignalDBGraph(signal_db_path)
+
+    # Subsample if needed
+    effective_path = subsample_signal_db(signal_db_path, max_nodes, tmp_dir)
+
+    graph = SignalDBGraph(effective_path)
     doc_ids = list(graph.nodes())
     print(f"   Graph: {len(doc_ids)} nodes")
 
@@ -250,6 +323,8 @@ def main():
                         help="Max simplex dimension (default: 2)")
     parser.add_argument("--num-scales", type=int, default=int(os.environ.get("TDA_NUM_SCALES", "10")),
                         help="Filtration scale count (default: 10)")
+    parser.add_argument("--max-nodes", type=int, default=int(os.environ.get("TDA_MAX_NODES", "300")),
+                        help="Max signal DB nodes for TDA (subsamples by density, default: 300)")
     args = parser.parse_args()
 
     # Resolve paths
@@ -279,7 +354,8 @@ def main():
     print(f"Signals: {Path(signal_path).name} ({sig_doc_count} docs, {sig_signal_count} signals)")
     print(f"Queries: {Path(queries_path).name} ({len(queries)} queries)")
     print(f"Config:  tda_weight={args.tda_weight}, ε={args.epsilon_max}, "
-          f"dim≤{args.max_dimension}, scales={args.num_scales}")
+          f"dim≤{args.max_dimension}, scales={args.num_scales}, "
+          f"max_nodes={args.max_nodes}")
 
     # --- Baseline ---
     print("\n1. Running BASELINE (keyword Jaccard only)...")
@@ -297,6 +373,7 @@ def main():
     t0 = time.time()
     tda_features = run_tda_pipeline(
         signal_path, args.epsilon_max, args.max_dimension, args.num_scales,
+        max_nodes=args.max_nodes,
     )
     tda_pipeline_time = time.time() - t0
     signal_doc_ids = set(tda_features["doc_ids"])
