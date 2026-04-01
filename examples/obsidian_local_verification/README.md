@@ -109,6 +109,37 @@ obsidian-signals.db
 [PersistentHomology] → [Features] → Maturity score
 ```
 
+## Sprint Evolution Experiment
+
+`sprint_evolution.py` processes each sprint sequentially, computing TDA metrics
+per sprint and presenting a tabular result showing knowledge graph evolution.
+
+```bash
+python3 examples/obsidian_local_verification/sprint_evolution.py              # per-sprint
+python3 examples/obsidian_local_verification/sprint_evolution.py --cumulative  # growing corpus
+python3 examples/obsidian_local_verification/sprint_evolution.py --tsv         # machine-readable
+```
+
+### Per-Sprint View (each sprint in isolation)
+
+| Phase | Sprints | Pattern |
+|-------|---------|---------|
+| **Early** (Jun-Aug 2025) | 25061-25081 | 0 edges, β₁=0, maturity ~0.45. Pure note-taking. |
+| **Linking begins** (Sep-Oct) | 25091-25102 | First edges appear, connectedness rises to 0.22 |
+| **Dimensional shift** (Nov 2025) | 25112 | **First β₁ > 0** — loops appear. Maturity jumps to 0.76. Zettelkasten structure emerges. |
+| **Rapid densification** (Dec-Jan) | 25120-26012 | β₁ hits 6, edges triple. Sprint 26011 has 83 edges in 74 docs. |
+| **Peak connectivity** (Mar 2026) | 26031 | 82% connected, 5 loops, 2 H1 persistence intervals. Most topologically mature sprint. |
+
+### Cumulative View (growing corpus)
+
+| Metric | Start (Jun 2025) | End (Mar 2026) | Trend |
+|--------|-------------------|-----------------|-------|
+| Maturity | 0.503 | 0.756 | +50% |
+| Connectedness | 0.133 | 0.534 | +4x |
+| β₁ (loops) | 0 | 142 | Steady growth |
+| H0 entropy | 0.69 | 6.39 | +9x (topological diversity) |
+| Dimensional shift | Nov 2025 | — | First β₁>0 at sprint 25112 |
+
 ## Beads
 
 - **bd-g9p** — TDA/Filtrations Pipeline (parent epic)
