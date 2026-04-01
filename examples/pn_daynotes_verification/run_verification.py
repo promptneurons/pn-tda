@@ -35,7 +35,7 @@ from examples.pn_daynotes_verification.cache import (
     save_cache,
 )
 from pn_tda.adapters.signal_db import SignalDBGraph
-from pn_tda.core.filtration import VietorisRipsBuilder
+from pn_tda.core.filtration import GraphFiltrationBuilder, VietorisRipsBuilder
 from pn_tda.core.persistence import PersistentHomology
 from pn_tda.features.betti import BettiNumberExtractor
 from pn_tda.features.maturity import ThreadMaturityScorer
@@ -172,10 +172,16 @@ def run_tda_pipeline(
     epsilon_max: float,
     max_dimension: int,
     num_scales: int,
-    max_nodes: int = 500,
+    max_nodes: int = 0,
+    use_graph_filtration: bool = True,
     tmp_dir: str | None = None,
 ) -> dict:
-    """Run TDA pipeline on signal DB and return per-doc features + corpus features."""
+    """Run TDA pipeline on signal DB and return per-doc features + corpus features.
+
+    By default uses GraphFiltrationBuilder (O(|V|+|E|)) which runs on the
+    full graph without subsampling. Falls back to VietorisRipsBuilder with
+    subsampling when use_graph_filtration=False.
+    """
     import math
     import tempfile
 
@@ -184,20 +190,30 @@ def run_tda_pipeline(
 
     print(f"   Loading SignalDB: {signal_db_path}")
 
-    # Subsample if needed
-    effective_path = subsample_signal_db(signal_db_path, max_nodes, tmp_dir)
+    if not use_graph_filtration and max_nodes > 0:
+        effective_path = subsample_signal_db(signal_db_path, max_nodes, tmp_dir)
+    else:
+        effective_path = signal_db_path
 
     graph = SignalDBGraph(effective_path)
     doc_ids = list(graph.nodes())
-    print(f"   Graph: {len(doc_ids)} nodes")
+    edge_count = len(list(graph.edges()))
+    print(f"   Graph: {len(doc_ids)} nodes, {edge_count} edges")
 
-    print(f"   Building VR complex (ε={epsilon_max}, dim≤{max_dimension})...")
-    t0 = time.time()
-    builder = VietorisRipsBuilder(
-        epsilon_max=epsilon_max, max_dimension=max_dimension
-    )
-    st = builder.build(graph)
-    print(f"   VR complex: {st.num_simplices()} simplices ({time.time()-t0:.1f}s)")
+    if use_graph_filtration:
+        print(f"   Building graph filtration (dim≤{max_dimension})...")
+        t0 = time.time()
+        builder = GraphFiltrationBuilder(max_dimension=max_dimension)
+        st = builder.build(graph)
+        print(f"   Simplicial complex: {st.num_simplices()} simplices ({time.time()-t0:.1f}s)")
+    else:
+        print(f"   Building VR complex (ε={epsilon_max}, dim≤{max_dimension})...")
+        t0 = time.time()
+        builder = VietorisRipsBuilder(
+            epsilon_max=epsilon_max, max_dimension=max_dimension
+        )
+        st = builder.build(graph)
+        print(f"   VR complex: {st.num_simplices()} simplices ({time.time()-t0:.1f}s)")
 
     print("   Computing persistent homology...")
     t0 = time.time()
@@ -334,6 +350,8 @@ def main():
                         help="Path to cache file for TDA features (skips pipeline on hit)")
     parser.add_argument("--no-cache", action="store_true",
                         help="Force recompute even if cache exists")
+    parser.add_argument("--vr", action="store_true",
+                        help="Use Vietoris-Rips (O(n²)) instead of graph filtration (O(|V|+|E|))")
     args = parser.parse_args()
 
     # Resolve paths
@@ -362,9 +380,10 @@ def main():
     print(f"\nCorpus:  {Path(corpus_path).name} ({doc_count} docs, {chunk_count} chunks)")
     print(f"Signals: {Path(signal_path).name} ({sig_doc_count} docs, {sig_signal_count} signals)")
     print(f"Queries: {Path(queries_path).name} ({len(queries)} queries)")
+    filt_mode = "VR (O(n²))" if args.vr else "Graph (O(|V|+|E|))"
     print(f"Config:  tda_weight={args.tda_weight}, ε={args.epsilon_max}, "
           f"dim≤{args.max_dimension}, scales={args.num_scales}, "
-          f"max_nodes={args.max_nodes}")
+          f"filtration={filt_mode}")
 
     # --- Baseline ---
     print("\n1. Running BASELINE (keyword Jaccard only)...")
@@ -383,7 +402,7 @@ def main():
     )
     cfg_hash = config_hash(
         signal_path, args.epsilon_max, args.max_dimension,
-        args.num_scales, args.max_nodes,
+        args.num_scales, args.max_nodes, use_graph_filtration=not args.vr,
     )
 
     tda_features = None
@@ -398,6 +417,7 @@ def main():
         tda_features = run_tda_pipeline(
             signal_path, args.epsilon_max, args.max_dimension, args.num_scales,
             max_nodes=args.max_nodes,
+            use_graph_filtration=not args.vr,
         )
         tda_pipeline_time = time.time() - t0
         print(f"   Pipeline complete ({tda_pipeline_time:.1f}s)")

@@ -41,6 +41,7 @@ def config_hash(
     max_dimension: int,
     num_scales: int,
     max_nodes: int,
+    use_graph_filtration: bool = True,
 ) -> str:
     """Deterministic hash of pipeline config for cache invalidation."""
     key = json.dumps({
@@ -50,6 +51,7 @@ def config_hash(
         "max_dimension": max_dimension,
         "num_scales": num_scales,
         "max_nodes": max_nodes,
+        "graph_filtration": use_graph_filtration,
     }, sort_keys=True)
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
