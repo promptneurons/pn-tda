@@ -114,13 +114,22 @@ obsidian-signals.db
 `sprint_evolution.py` processes each sprint sequentially, computing TDA metrics
 per sprint and presenting a tabular result showing knowledge graph evolution.
 
+Three topology layers are computed side-by-side for each sprint:
+
+| Layer | What it captures | Complexity | Source |
+|-------|-----------------|------------|--------|
+| **Graph filtration** | Inter-document links (wikilinks, uplinks) | O(\|V\|+\|E\|) | Signal DB edges |
+| **Vietoris-Rips** | Statistical signal co-occurrence | O(n²) | All-pairs Jaccard |
+| **Heading topology** | Intra-document outline structure | O(headings) | Markdown `#`/`##`/`###` |
+
 ```bash
-python3 examples/obsidian_local_verification/sprint_evolution.py              # per-sprint
-python3 examples/obsidian_local_verification/sprint_evolution.py --cumulative  # growing corpus
-python3 examples/obsidian_local_verification/sprint_evolution.py --tsv         # machine-readable
+python3 examples/obsidian_local_verification/sprint_evolution.py                                  # per-sprint
+python3 examples/obsidian_local_verification/sprint_evolution.py --cumulative                      # growing corpus
+python3 examples/obsidian_local_verification/sprint_evolution.py --vault-path ~/environment/obsidian-local  # with headings
+python3 examples/obsidian_local_verification/sprint_evolution.py --tsv                             # machine-readable
 ```
 
-### Per-Sprint View (each sprint in isolation)
+### Per-Sprint Findings (Graph Filtration)
 
 | Phase | Sprints | Pattern |
 |-------|---------|---------|
@@ -139,6 +148,51 @@ python3 examples/obsidian_local_verification/sprint_evolution.py --tsv         #
 | β₁ (loops) | 0 | 142 | Steady growth |
 | H0 entropy | 0.69 | 6.39 | +9x (topological diversity) |
 | Dimensional shift | Nov 2025 | — | First β₁>0 at sprint 25112 |
+
+### Graph Filtration vs Vietoris-Rips
+
+Running both builders side-by-side on per-sprint data (5-88 docs, feasible for O(n²)):
+
+| | Graph Filtration | Vietoris-Rips |
+|---|---|---|
+| **What it measures** | Actual knowledge structure (wiki links + uplinks) | Statistical co-occurrence (signal Jaccard) |
+| **β₀ range** | 5–61 components (real structure) | Always 1 (everything connected) |
+| **β₁ loops** | 0→14 (structure emerges at 25112) | Always 0 (dense blob, no holes) |
+| **Maturity trend** | 0.50 → 0.77 (+54%) | 0.47 → 0.43 (flat/declining) |
+| **Simplices** | 5–196 (sparse, fast) | 25–113K (dense, slow) |
+
+VR sees every sprint as a single fully-connected component (β₀=1, conn=1.0)
+because all-pairs Jaccard puts all documents within ε=1.0 — it detects no
+topological structure. Graph filtration preserves the actual link structure
+that humans created. **For knowledge graphs, the graph IS the topology.**
+
+### Heading Topology (Intra-Document Structure)
+
+When `--vault-path` is provided, each document's markdown heading hierarchy
+(`#` → `##` → `###`) is parsed into a tree and TDA is computed on the
+combined heading graph per sprint.
+
+Heading topology columns:
+- **Hdg**: total headings across the sprint's documents
+- **Dp**: max heading depth (1-6)
+- **hβ₀**: heading graph components (separate outline trees)
+- **hβ₁**: heading graph loops (sibling cross-references within outlines)
+- **Br**: average branching factor (children per non-leaf heading)
+
+Key findings:
+
+| Sprint | Headings | Depth | hβ₁ (loops) | Branching | Observation |
+|--------|----------|-------|-------------|-----------|-------------|
+| 25072 | 94 | 3 | 73 | 20.2 | Highest branching — flat wide outlines |
+| 25111 | 396 | 6 | 91 | 4.3 | Deepest outlines (6 levels), rich structure |
+| 25120 | 474 | 4 | 79 | 18.9 | High branching + many loops |
+| 26020 | 2,167 | 6 | 741 | 5.9 | **Most heading loops** — deeply structured documents with extensive cross-referencing |
+| 26031 | 319 | 4 | 93 | 3.7 | Sprint 26033 plan period — dense internal structure |
+
+Sprint 26020 (Feb 2026) stands out with 2,167 headings and 741 heading loops
+— this sprint contains documents with deeply nested, richly cross-referenced
+outlines. The heading topology captures document maturity that the inter-document
+graph cannot see.
 
 ## Beads
 
