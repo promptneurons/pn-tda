@@ -104,8 +104,8 @@ def _extract(graph, st, intervals):
     }
 
 
-def compute_metrics(db_path):
-    """Run Graph + VR pipelines."""
+def compute_metrics(db_path, include_vr=True):
+    """Run Graph filtration pipeline, optionally also VR."""
     graph = SignalDBGraph(db_path)
     doc_ids = list(graph.nodes())
     edges = list(graph.edges())
@@ -116,11 +116,14 @@ def compute_metrics(db_path):
     gf_iv = PersistentHomology().compute(gf_st)
     gf = _extract(graph, gf_st, gf_iv)
 
-    vr_st = VietorisRipsBuilder(epsilon_max=1.0, max_dimension=2).build(graph)
-    vr_iv = PersistentHomology().compute(vr_st)
-    vr = _extract(graph, vr_st, vr_iv)
+    result = {"nodes": len(doc_ids), "edges": len(edges), "gf": gf}
 
-    return {"nodes": len(doc_ids), "edges": len(edges), "gf": gf, "vr": vr}
+    if include_vr:
+        vr_st = VietorisRipsBuilder(epsilon_max=1.0, max_dimension=2).build(graph)
+        vr_iv = PersistentHomology().compute(vr_st)
+        result["vr"] = _extract(graph, vr_st, vr_iv)
+
+    return result
 
 
 def compute_heading_metrics_from_db(corpus_conn, source_paths):
@@ -197,14 +200,33 @@ def compute_heading_metrics_from_db(corpus_conn, source_paths):
     }
 
 
+def sprint_sort_key(sid):
+    """Convert sprint ID to a sortable (year, month, seq) tuple.
+
+    Daynotes numbering:
+      4-digit: Ymms — Y+2010=year, mm=month, s=sprint-in-month (2019 and earlier)
+      5-digit: YYmms — 20YY=year, mm=month, s=sprint-in-month (2020+)
+    """
+    try:
+        if len(sid) == 5:
+            return (2000 + int(sid[:2]), int(sid[2:4]), int(sid[4]))
+        elif len(sid) == 4:
+            return (2010 + int(sid[0]), int(sid[1:3]), int(sid[3]))
+    except ValueError:
+        pass
+    return (0, 0, 0)
+
+
 def sprint_label(sid):
-    if len(sid) != 5:
-        return sid
-    yy, mm, s = sid[:2], sid[2:4], sid[4]
+    """Convert sprint ID to human-readable label."""
     months = {"01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr", "05": "May",
               "06": "Jun", "07": "Jul", "08": "Aug", "09": "Sep", "10": "Oct",
               "11": "Nov", "12": "Dec"}
-    return f"20{yy}-{months.get(mm, mm)}-{s}"
+    year, mm_int, s = sprint_sort_key(sid)
+    if year == 0:
+        return sid
+    mm = f"{mm_int:02d}"
+    return f"{year}-{months.get(mm, mm)}-{s}"
 
 
 def main():
@@ -214,8 +236,12 @@ def main():
     parser.add_argument("--cumulative", action="store_true")
     parser.add_argument("--recent", type=int, default=0,
                         help="Only show the N most recent sprints (default: all)")
+    parser.add_argument("--no-vr", action="store_true",
+                        help="Skip Vietoris-Rips (much faster for large runs)")
     parser.add_argument("--tsv", action="store_true")
     args = parser.parse_args()
+
+    include_vr = not args.no_vr
 
     signal_path = args.signal_db or find_path(DEFAULT_SIGNAL_PATHS)
     corpus_path = args.corpus_db or find_path(DEFAULT_CORPUS_PATHS)
@@ -227,11 +253,12 @@ def main():
     source_conn = sqlite3.connect(signal_path)
     source_conn.row_factory = sqlite3.Row
 
-    sprints = source_conn.execute(
+    sprints_raw = source_conn.execute(
         "SELECT sprint_id, COUNT(*) as cnt FROM documents "
-        "WHERE sprint_id IS NOT NULL AND length(sprint_id) = 5 "
-        "GROUP BY sprint_id ORDER BY sprint_id"
+        "WHERE sprint_id IS NOT NULL "
+        "GROUP BY sprint_id"
     ).fetchall()
+    sprints = sorted(sprints_raw, key=lambda r: sprint_sort_key(r[0]))
 
     if args.recent > 0:
         sprints = sprints[-args.recent:]
@@ -266,23 +293,27 @@ def main():
                 has_headings = True
 
     mode = "cumulative" if args.cumulative else "per-sprint"
-    print(f"{'═' * 115}")
-    print(f"  Daynotes Sprint Evolution ({mode})")
-    print(f"{'═' * 115}")
+    vr_label = "" if not include_vr else " + VR"
+    w = 115
+    print(f"{'═' * w}")
+    print(f"  Daynotes Sprint Evolution ({mode}{vr_label})")
+    print(f"{'═' * w}")
     print(f"  Signal DB: {Path(signal_path).name} ({len(sprints)} sprints)")
     if corpus_path:
         print(f"  Corpus DB: {Path(corpus_path).name} (heading content)")
     print()
 
-    hdg_hdr = " │ Heading Topology" if has_headings else ""
     hdg_col = f" │ {'Hdg':>5} {'Dp':>3} {'hβ₀':>5} {'hβ₁':>5} {'Br':>4}" if has_headings else ""
     if not args.tsv:
-        print(f"  {'':22}{'':10}│ {'Graph Filtration':^29} │ {'Vietoris-Rips':^29}{hdg_hdr}")
+        vr_hdr = f" │ {'Vietoris-Rips':^29}" if include_vr else ""
+        hdg_hdr = " │ Heading Topology" if has_headings else ""
+        print(f"  {'':22}{'':10}│ {'Graph Filtration':^29}{vr_hdr}{hdg_hdr}")
+        vr_cols = f" │ {'Spl':>6} {'β₀':>4} {'β₁':>4} {'Mat':>5} {'Con':>5}" if include_vr else ""
         print(f"  {'Sprint':<7} {'Label':<11} {'N':>4} {'E':>4}"
               f"│ {'Spl':>6} {'β₀':>4} {'β₁':>4} {'Mat':>5} {'Con':>5}"
-              f" │ {'Spl':>6} {'β₀':>4} {'β₁':>4} {'Mat':>5} {'Con':>5}"
-              f"{hdg_col}")
-        print(f"  {'─' * (92 + (27 if has_headings else 0))}")
+              f"{vr_cols}{hdg_col}")
+        sep_len = 63 + (30 if include_vr else 0) + (27 if has_headings else 0)
+        print(f"  {'─' * sep_len}")
 
     results = []
     cumulative_sprints = []
@@ -303,7 +334,7 @@ def main():
 
             db_path = os.path.join(tmpdir, f"sprint_{sprint_id}.db")
             build_sprint_db(source_conn, slist, db_path)
-            metrics = compute_metrics(db_path)
+            metrics = compute_metrics(db_path, include_vr=include_vr)
             os.unlink(db_path)
 
             if metrics is None:
@@ -323,21 +354,26 @@ def main():
             results.append(metrics)
 
             gf = metrics["gf"]
-            vr = metrics["vr"]
+            vr = metrics.get("vr")
 
             if args.tsv:
                 vals = [
                     sprint_id, label, str(metrics["nodes"]), str(metrics["edges"]),
                     str(gf["simplices"]), str(gf["b0"]), str(gf["b1"]),
                     f"{gf['maturity']:.4f}", f"{gf['connected']:.4f}",
-                    str(vr["simplices"]), str(vr["b0"]), str(vr["b1"]),
-                    f"{vr['maturity']:.4f}", f"{vr['connected']:.4f}",
                 ]
+                if include_vr and vr:
+                    vals += [str(vr["simplices"]), str(vr["b0"]), str(vr["b1"]),
+                             f"{vr['maturity']:.4f}", f"{vr['connected']:.4f}"]
                 if hdg:
                     vals += [str(hdg["headings"]), str(hdg["depth"]),
                              str(hdg["hb0"]), str(hdg["hb1"]), f"{hdg['branch']:.1f}"]
                 print("\t".join(vals))
             else:
+                vr_str = ""
+                if include_vr and vr:
+                    vr_str = (f" │ {vr['simplices']:>6} {vr['b0']:>4} {vr['b1']:>4} "
+                              f"{vr['maturity']:>5.2f} {vr['connected']:>5.2f}")
                 hdg_str = ""
                 if hdg:
                     hdg_str = (f" │ {hdg['headings']:>5} {hdg['depth']:>3} "
@@ -347,9 +383,7 @@ def main():
                     f"{metrics['edges']:>4}"
                     f"│ {gf['simplices']:>6} {gf['b0']:>4} {gf['b1']:>4} "
                     f"{gf['maturity']:>5.2f} {gf['connected']:>5.2f}"
-                    f" │ {vr['simplices']:>6} {vr['b0']:>4} {vr['b1']:>4} "
-                    f"{vr['maturity']:>5.2f} {vr['connected']:>5.2f}"
-                    f"{hdg_str}"
+                    f"{vr_str}{hdg_str}"
                 )
 
     source_conn.close()
@@ -358,11 +392,14 @@ def main():
 
     if not args.tsv and len(results) >= 2:
         first, last = results[0], results[-1]
-        print(f"\n  {'─' * (92 + (27 if has_headings else 0))}")
+        sep_len = 63 + (30 if include_vr else 0) + (27 if has_headings else 0)
+        print(f"\n  {'─' * sep_len}")
         print(f"  TREND ({first['sprint']} → {last['sprint']}, {len(results)} sprints):")
-        for builder, key in [("Graph", "gf"), ("VR   ", "vr")]:
-            print(f"    {builder}: maturity {first[key]['maturity']:.3f}→{last[key]['maturity']:.3f}  "
-                  f"conn {first[key]['connected']:.3f}→{last[key]['connected']:.3f}")
+        print(f"    Graph: maturity {first['gf']['maturity']:.3f}→{last['gf']['maturity']:.3f}  "
+              f"conn {first['gf']['connected']:.3f}→{last['gf']['connected']:.3f}")
+        if include_vr and "vr" in first and "vr" in last:
+            print(f"    VR   : maturity {first['vr']['maturity']:.3f}→{last['vr']['maturity']:.3f}  "
+                  f"conn {first['vr']['connected']:.3f}→{last['vr']['connected']:.3f}")
 
         gf_peak = max(results, key=lambda r: r["gf"]["maturity"])
         print(f"    Peak maturity: {gf_peak['sprint']} ({gf_peak['label']}) = {gf_peak['gf']['maturity']:.3f}")
