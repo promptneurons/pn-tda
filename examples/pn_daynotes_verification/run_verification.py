@@ -40,6 +40,7 @@ from pn_tda.core.persistence import PersistentHomology
 from pn_tda.features.betti import BettiNumberExtractor
 from pn_tda.features.maturity import ThreadMaturityScorer
 from pn_tda.features.persistence import PersistenceFeatureExtractor
+from pn_tda.utils.ontology import OntologyDistance
 
 WORD_RE = re.compile(r"\b[a-z]{3,}\b")
 
@@ -174,6 +175,8 @@ def run_tda_pipeline(
     num_scales: int,
     max_nodes: int = 0,
     use_graph_filtration: bool = True,
+    corpus_db_path: str | None = None,
+    wordnet_dir: str | None = None,
     tmp_dir: str | None = None,
 ) -> dict:
     """Run TDA pipeline on signal DB and return per-doc features + corpus features.
@@ -181,6 +184,10 @@ def run_tda_pipeline(
     By default uses GraphFiltrationBuilder (O(|V|+|E|)) which runs on the
     full graph without subsampling. Falls back to VietorisRipsBuilder with
     subsampling when use_graph_filtration=False.
+
+    If corpus_db_path and/or wordnet_dir are provided, uses ontology-aware
+    distances (CEC/JDN hierarchy + SUMO/WordNet expansion) instead of flat
+    signal Jaccard.
     """
     import math
     import tempfile
@@ -199,6 +206,32 @@ def run_tda_pipeline(
     doc_ids = list(graph.nodes())
     edge_count = len(list(graph.edges()))
     print(f"   Graph: {len(doc_ids)} nodes, {edge_count} edges")
+
+    # Load ontology-aware distance if available
+    ont = None
+    if corpus_db_path or wordnet_dir:
+        print("   Loading ontology distance...")
+        t0 = time.time()
+        ont = OntologyDistance(
+            corpus_db_path=corpus_db_path,
+            wordnet_dir=wordnet_dir,
+        )
+        ont_stats = []
+        if corpus_db_path:
+            ont_stats.append(f"{len(ont._ancestors)} concepts in hierarchy")
+            ont_stats.append(f"{sum(len(v) for v in ont._doc_concepts.values())} concept tags")
+        if ont._sumo_index:
+            ont_stats.append(f"{len(ont._sumo_index)} WordNet lemmas")
+            ont_stats.append(f"{len(ont._sumo_mappings)} SUMO mappings")
+        print(f"   Ontology: {', '.join(ont_stats)} ({time.time()-t0:.1f}s)")
+
+        # Wrap graph's get_distance to use ontology-aware distance
+        original_get_distance = graph.get_distance
+        def ontology_distance(u, v, _ont=ont, _graph=graph, _orig=original_get_distance):
+            signals_u = _graph._signals.get(u, set())
+            signals_v = _graph._signals.get(v, set())
+            return _ont.combined_distance(u, v, signals_u, signals_v)
+        graph.get_distance = ontology_distance
 
     if use_graph_filtration:
         print(f"   Building graph filtration (dim≤{max_dimension})...")
@@ -352,7 +385,21 @@ def main():
                         help="Force recompute even if cache exists")
     parser.add_argument("--vr", action="store_true",
                         help="Use Vietoris-Rips (O(n²)) instead of graph filtration (O(|V|+|E|))")
+    parser.add_argument("--wordnet-dir", default=os.environ.get("WORDNET_DIR", ""),
+                        help="Path to WordNetMappings directory for SUMO expansion")
     args = parser.parse_args()
+
+    # Auto-detect wordnet dir
+    if not args.wordnet_dir:
+        default_wn = os.path.expanduser(
+            "~/pn-monorepo/pn-monorepo/data/Ontologies/wordnet-mappings"
+        )
+        if not os.path.isdir(default_wn):
+            default_wn = str(
+                Path(__file__).resolve().parents[4] / "data/Ontologies/wordnet-mappings"
+            )
+        if os.path.isdir(default_wn):
+            args.wordnet_dir = default_wn
 
     # Resolve paths
     corpus_path = args.corpus_db or find_path(DEFAULT_CORPUS_PATHS, "CORPUS_DB", "corpus DB")
@@ -418,6 +465,8 @@ def main():
             signal_path, args.epsilon_max, args.max_dimension, args.num_scales,
             max_nodes=args.max_nodes,
             use_graph_filtration=not args.vr,
+            corpus_db_path=corpus_path,
+            wordnet_dir=args.wordnet_dir or None,
         )
         tda_pipeline_time = time.time() - t0
         print(f"   Pipeline complete ({tda_pipeline_time:.1f}s)")
