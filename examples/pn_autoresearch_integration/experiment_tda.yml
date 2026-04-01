@@ -1,0 +1,32 @@
+# Example experiment config: TDA features as a scorer in kitsap-searchengine-lite
+#
+# To use: copy this into kitsap-searchengine-lite/config/ and adjust paths.
+# The tda_features scorer requires a signal DB from azure-wiki-analysis.
+#
+# See README.md for full setup instructions.
+
+name: tda-experiment
+scorers:
+  # TDA topological features scorer
+  - name: tda_features
+    weight: 0.30
+    signal_db: "./signals.db"    # Path to azure-wiki-analysis output
+    epsilon_max: 0.7             # VR complex distance threshold
+    max_dimension: 2             # Max simplex dimension (2 = triangles)
+    num_scales: 10               # Filtration scale resolution
+    maturity_weight: 0.5         # Weight for thread maturity score
+    persistence_weight: 0.3      # Weight for persistence entropy
+    betti_weight: 0.2            # Weight for Betti stability
+
+  # Standard text scorers (for fusion baseline)
+  - name: keyword_jaccard
+    weight: 0.50
+    stopword_filter: true
+    min_word_length: 3
+
+  - name: fts5_fulltext
+    weight: 0.20
+    limit_multiplier: 5
+
+fusion: rrf
+rrf_k: 60

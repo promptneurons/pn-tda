@@ -1,0 +1,10 @@
+{"query": "topological data analysis persistent homology", "relevant": ["notes/tda-intro.md", "notes/persistence.md", "notes/homology.md"]}
+{"query": "simplicial complex filtration construction", "relevant": ["notes/filtration.md", "notes/tda-intro.md"]}
+{"query": "Betti numbers connected components", "relevant": ["notes/homology.md", "notes/tda-intro.md"]}
+{"query": "persistence diagram birth death intervals", "relevant": ["notes/persistence.md", "notes/homology.md"]}
+{"query": "Vietoris Rips complex distance threshold", "relevant": ["notes/filtration.md", "notes/tda-intro.md"]}
+{"query": "applications of TDA shape analysis", "relevant": ["notes/applications.md", "notes/tda-intro.md"]}
+{"query": "homology groups classification", "relevant": ["notes/homology.md"]}
+{"query": "knowledge graph topological features", "relevant": ["notes/applications.md", "notes/tda-intro.md", "notes/filtration.md"]}
+{"query": "simplex tree data structure efficient storage", "relevant": ["notes/filtration.md", "notes/persistence.md"]}
+{"query": "maturity scoring thread evolution", "relevant": ["notes/applications.md", "notes/persistence.md"]}
